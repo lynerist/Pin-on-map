@@ -4,7 +4,11 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -17,10 +21,9 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.ITileSource
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.CopyrightOverlay
 import org.osmdroid.views.overlay.Marker
@@ -40,43 +43,26 @@ class MainActivity : Activity() {
 
     private lateinit var map: MapView
     private lateinit var info: TextView
-    private lateinit var btnMap: Button
     private lateinit var btnList: Button
 
     private val prefs by lazy { getSharedPreferences("sentieri", MODE_PRIVATE) }
     private val spots = mutableListOf<Spot>()
     private val markers = mutableListOf<Marker>()
     private val dateFmt = SimpleDateFormat("dd/MM/yyyy HH:mm", Locale.getDefault())
+
     private var locOverlay: MyLocationNewOverlay? = null
     private var compass: CompassOverlay? = null
-
     private val handler = Handler(Looper.getMainLooper())
-    private var sourceIdx = 0
 
-    private val labels = listOf("Topografica", "Sentieri/ciclo", "OSM standard")
-    private val sources: List<ITileSource> by lazy {
-        listOf(
-            XYTileSource(
-                "OpenTopoMap", 0, 17, 256, ".png",
-                arrayOf(
-                    "https://a.tile.opentopomap.org/",
-                    "https://b.tile.opentopomap.org/",
-                    "https://c.tile.opentopomap.org/"
-                ),
-                "© OpenTopoMap (CC-BY-SA), dati © OpenStreetMap"
-            ),
-            XYTileSource(
-                "CyclOSM", 0, 18, 256, ".png",
-                arrayOf(
-                    "https://a.tile-cyclosm.openstreetmap.fr/cyclosm/",
-                    "https://b.tile-cyclosm.openstreetmap.fr/cyclosm/",
-                    "https://c.tile-cyclosm.openstreetmap.fr/cyclosm/"
-                ),
-                "© CyclOSM, dati © OpenStreetMap contributors"
-            ),
-            TileSourceFactory.MAPNIK
-        )
-    }
+    private val topoMap = XYTileSource(
+        "OpenTopoMap", 0, 17, 256, ".png",
+        arrayOf(
+            "https://a.tile.opentopomap.org/",
+            "https://b.tile.opentopomap.org/",
+            "https://c.tile.opentopomap.org/"
+        ),
+        "© OpenTopoMap (CC-BY-SA), dati © OpenStreetMap"
+    )
 
     private val ticker = object : Runnable {
         override fun run() {
@@ -86,6 +72,33 @@ class MainActivity : Activity() {
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun makeButton(
+        label: String,
+        bgColor: Int,
+        size: Float,
+        bold: Boolean,
+        onClick: () -> Unit
+    ): Button {
+        val shape = GradientDrawable().apply {
+            setShape(GradientDrawable.RECTANGLE)
+            cornerRadius = dp(28).toFloat()
+            setColor(bgColor)
+        }
+        return Button(this).apply {
+            text = label
+            isAllCaps = false
+            textSize = size
+            if (bold) setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = RippleDrawable(ColorStateList.valueOf(Color.argb(70, 255, 255, 255)), shape, null)
+            stateListAnimator = null
+            minHeight = 0
+            minimumHeight = 0
+            setPadding(dp(18), dp(14), dp(18), dp(14))
+            setOnClickListener { onClick() }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,11 +114,12 @@ class MainActivity : Activity() {
         root.fitsSystemWindows = true
 
         map = MapView(this).apply {
-            setTileSource(sources[0])
+            setTileSource(topoMap)
             setMultiTouchControls(true)
             isTilesScaledToDpi = true
             minZoomLevel = 3.0
             maxZoomLevel = 19.0
+            zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
             val v = prefs.getString("view", null)?.split(";")
             if (v != null && v.size == 3) {
                 controller.setZoom(v[2].toDouble())
@@ -115,7 +129,12 @@ class MainActivity : Activity() {
                 controller.setCenter(GeoPoint(42.5, 12.5))
             }
             overlays.add(CopyrightOverlay(this@MainActivity))
-            overlays.add(ScaleBarOverlay(this).apply { setAlignBottom(true) })
+            overlays.add(
+                ScaleBarOverlay(this).apply {
+                    setAlignBottom(true)
+                    setScaleBarOffset(dp(12), dp(96))
+                }
+            )
         }
         root.addView(
             map,
@@ -141,46 +160,47 @@ class MainActivity : Activity() {
             )
         )
 
-        val btnCenter = Button(this).apply {
-            text = "Centra"
-            setOnClickListener {
-                locOverlay?.let { ov ->
-                    ov.enableFollowLocation()
-                    ov.myLocation?.let { map.controller.animateTo(it) }
-                }
+        val dark = Color.argb(225, 33, 33, 33)
+        val green = Color.parseColor("#E62E7D32")
+
+        btnList = makeButton("Punti (0)", dark, 15f, false) { showSpotList() }
+        val btnSpot = makeButton("Segna punto", green, 18f, true) { addSpot() }
+        val btnCenter = makeButton("Centra", dark, 15f, false) {
+            locOverlay?.let { ov ->
+                ov.enableFollowLocation()
+                ov.myLocation?.let { map.controller.animateTo(it) }
             }
         }
-        btnMap = Button(this).apply {
-            text = labels[0]
-            setOnClickListener {
-                sourceIdx = (sourceIdx + 1) % sources.size
-                map.setTileSource(sources[sourceIdx])
-                text = labels[sourceIdx]
-            }
-        }
-        val btnSpot = Button(this).apply {
-            text = "Segna punto"
-            textSize = 16f
-            setOnClickListener { addSpot() }
-        }
-        btnList = Button(this).apply {
-            text = "Punti (0)"
-            setOnClickListener { showSpotList() }
-        }
-        val buttons = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(btnSpot)
-            addView(btnList)
-            addView(btnCenter)
-            addView(btnMap)
+
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(
+                btnList,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { rightMargin = dp(8) }
+            )
+            addView(
+                btnSpot,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            )
+            addView(
+                btnCenter,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { leftMargin = dp(8) }
+            )
         }
         root.addView(
-            buttons,
+            bar,
             FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.END or Gravity.CENTER_VERTICAL
-            ).apply { rightMargin = dp(8) }
+                Gravity.BOTTOM
+            ).apply { setMargins(dp(12), 0, dp(12), dp(30)) }
         )
 
         setContentView(root)
@@ -293,6 +313,8 @@ class MainActivity : Activity() {
             .setNegativeButton("Chiudi", null)
             .show()
     }
+
+    // ---------- Posizione ----------
 
     private fun hasLocationPermission() =
         checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
